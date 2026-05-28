@@ -2,11 +2,11 @@
 
 ARAON Orientation is the first-day OT/orientation workflow tool.
 
-## Current Split Baseline
+## Ownership
 
-This first split starts from the standalone admission/orientation app and uses `araon-core` for shared infrastructure.
+This app contains only first-day OT/orientation workflows while shared infrastructure lives in `araon-core`.
 
-Expected Orientation-owned areas:
+Orientation-owned areas:
 
 - orientation dashboard
 - OT time groups and alarms
@@ -15,6 +15,13 @@ Expected Orientation-owned areas:
 - orientation sheet update
 - timetable assignment and clipboard text
 - admission/orientation logs
+
+Not included:
+
+- opening/AS dashboard
+- AS templates/manual AS add
+- setup work sidebar
+- Kakao quick workflow
 
 ## Install Dependencies
 
@@ -27,4 +34,3 @@ python -m pip install -r requirements.txt
 ```bat
 python admission.py
 ```
-
