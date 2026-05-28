@@ -4,6 +4,8 @@
 # launcher.spec — ARAON.exe 빌드 설정
 # 빌드: pyinstaller launcher.spec --clean
 
+from PyInstaller.utils.hooks import collect_submodules
+
 a = Analysis(
     ['launcher.py'],
     pathex=[],
@@ -16,7 +18,7 @@ a = Analysis(
         # requests 가 설치된 경우 자동 포함
         'requests',
         'urllib.request',
-        'araon_core.updater',
+        *collect_submodules('araon_core'),
     ],
     hookspath=[],
     hooksconfig={},
