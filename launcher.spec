@@ -25,7 +25,7 @@ a = Analysis(
     runtime_hooks=[],
     excludes=[
         # 런처에 불필요한 무거운 패키지 제외 → 빌드 크기 축소
-        'customtkinter', 'selenium', 'cv2', 'PIL',
+        'customtkinter', 'playwright', 'cv2', 'PIL',
         'gspread', 'oauth2client', 'keyboard', 'pyautogui',
         'numpy', 'pandas',
     ],

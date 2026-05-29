@@ -9,7 +9,7 @@ a = Analysis(
     datas=[
         *collect_data_files('customtkinter'),
         *collect_data_files('tkcalendar'),
-        *collect_data_files('webdriver_manager'),
+        *collect_data_files('playwright'),
         ('timetable_data.json', '.'),
         ('favicon.ico', '.'),
     ],
@@ -18,8 +18,7 @@ a = Analysis(
         *collect_submodules('oauth2client'),
         *collect_submodules('google'),
         *collect_submodules('gspread'),
-        *collect_submodules('selenium'),
-        *collect_submodules('webdriver_manager'),
+        *collect_submodules('playwright'),
         *collect_submodules('tkcalendar'),
         *collect_submodules('customtkinter'),
         'tkinter',

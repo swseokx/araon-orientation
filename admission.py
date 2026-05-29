@@ -13,18 +13,19 @@ import traceback
 
 import customtkinter as ctk
 from tkinter import messagebox
-from selenium.webdriver.common.by import By
-from selenium.webdriver.common.keys import Keys
-from selenium.webdriver.support.ui import WebDriverWait, Select
-from selenium.webdriver.support import expected_conditions as EC
 
-from araon_core import ConfigManager, LogManager, SeleniumManager
+from araon_core import ConfigManager, LogManager, PlaywrightManager
 
 
 def _get_base_path() -> str:
     if getattr(sys, 'frozen', False):
         return os.path.dirname(sys.executable)
     return os.path.dirname(os.path.abspath(__file__))
+
+
+def _extract_member_ref(raw: str) -> dict | None:
+    from araon_core.playwright_manager import extract_member_ref
+    return extract_member_ref(raw)
 
 
 # ──────────────────────────────────────────────────
@@ -533,143 +534,78 @@ class AdmissionApp(ctk.CTk):
         threading.Thread(
             target=self._run_lms_assignment,
             args=(student, selected_subs, final_selection),
-            daemon=True
+            daemon=True,
         ).start()
 
     def _run_lms_assignment(self, student: dict, subjects: list[str], final_selection: dict):
-        driver = None
+        session = None
         name = student['name']
         sheet_row = student['row']
         try:
             self.write_log(f'[{name}] LMS 자동 배정 시작...')
             lms_id, lms_pw = self.cfg.get_credentials()
-
-            driver = SeleniumManager.create_incognito()
-            wait = SeleniumManager.lms_login(driver, lms_id, lms_pw)
-
-            # 학생 상세 페이지 이동
-            driver.get('https://www.lmsone.com/wcms/member/memManage/memList.asp')
-            search_box = wait.until(
-                EC.presence_of_element_located(
-                    (By.CSS_SELECTOR, "input[name='keyword'], input[name='keyWord']")
-                )
+            session = PlaywrightManager.create_lms_session(
+                lms_id,
+                lms_pw,
+                headless=False,
+                background=True,
             )
-            driver.execute_script("arguments[0].value = arguments[1];", search_box, name)
-            search_box.send_keys(Keys.ENTER)
-            time.sleep(0.5)
-
-            name_lower = name.strip().lower()
-            target_link = None
-            for link in driver.find_elements(By.CSS_SELECTOR, 'table tbody tr a'):
-                lt = link.text.replace(' ', '').lower()
-                if lt == name_lower or lt.startswith(name_lower + '('):
-                    target_link = link
-                    break
-
-            if not target_link:
+            if not session.open_student(name):
                 self.write_log(f'[{name}] 학생 링크를 찾지 못했습니다.')
                 return
-
-            driver.execute_script('arguments[0].click();', target_link)
-            wait.until(lambda d: len(d.window_handles) > 1)
-            all_wins = driver.window_handles
-            target_win = all_wins[-1]
-            for w in all_wins:
-                if w != target_win:
-                    driver.switch_to.window(w)
-                    driver.close()
-            driver.switch_to.window(target_win)
-
-            # 배정 페이지로 이동
-            current_url = driver.current_url
-            mid_m = re.search(r'member_id=([^&]+)', current_url)
-            mseq_m = re.search(r'member_seq=([^&]+)', current_url)
-            if not (mid_m and mseq_m):
+            ref = _extract_member_ref(session.url)
+            if not ref:
                 self.write_log(f'[{name}] 회원 ID/SEQ 추출 실패')
                 return
-
-            from urllib.parse import urlparse
-            parsed = urlparse(current_url)
-            base = f'{parsed.scheme}://{parsed.netloc}'
             assign_url = (
-                f"{base}/wcms/member/memManage/tab/classSearch.asp"
-                f"?member_id={mid_m.group(1)}&member_seq={mseq_m.group(1)}"
+                'https://www.lmsone.com/wcms/member/memManage/tab/classSearch.asp'
+                f"?member_id={ref['member_id']}&member_seq={ref['member_seq']}"
             )
-            driver.get(assign_url)
-            wait.until(EC.presence_of_element_located((By.ID, 'key')))
+            page = session.page
+            page.goto(assign_url, wait_until='domcontentloaded')
+            page.locator('#key').wait_for(timeout=10000)
 
             time_map = {
                 '16:40': '6481', '17:30': '6495', '18:20': '6477',
                 '19:10': '6421', '20:00': '6422', '20:50': '6453',
                 '21:40': '6424', '22:30': '6494', '23:20': '6701',
             }
-            day_map = {
-                '월': '6502', '화': '6503', '수': '6504', '목': '6505', '금': '6506'
-            }
+            day_map = {'월': '6502', '화': '6503', '수': '6504', '목': '6505', '금': '6506'}
 
             success = 0
             for (day, ts), sub in final_selection.items():
                 try:
-                    Select(
-                        wait.until(EC.presence_of_element_located((By.ID, 'key')))
-                    ).select_by_value('tb1.onair_nm')
-                    kw = driver.find_element(By.NAME, 'keyWord')
-                    kw.clear()
-                    kw.send_keys(sub)
-
+                    page.locator('#key').select_option(value='tb1.onair_nm')
+                    page.locator("[name='keyWord']").fill(sub)
                     t_val = time_map.get(ts, '')
                     if t_val:
-                        Select(
-                            driver.find_element(By.ID, 'sh_school_time')
-                        ).select_by_value(t_val)
-
-                    for cb in driver.find_elements(By.NAME, 'sh_week_gb'):
-                        if cb.is_selected():
-                            driver.execute_script('arguments[0].click();', cb)
-
+                        page.locator('#sh_school_time').select_option(value=t_val)
+                    for cb in page.locator("[name='sh_week_gb']").all():
+                        try:
+                            if cb.is_checked():
+                                cb.click()
+                        except Exception:
+                            pass
                     d_val = day_map.get(day)
                     if d_val:
-                        tgt = driver.find_element(
-                            By.XPATH,
-                            f"//input[@name='sh_week_gb' and @value='{d_val}']"
-                        )
-                        driver.execute_script('arguments[0].click();', tgt)
-
-                    srch = driver.find_element(
-                        By.XPATH,
-                        "//input[@type='button' and @value='검색' and contains(@class, 'srch')]"
-                    )
-                    driver.execute_script('arguments[0].click();', srch)
-
-                    checkbox = WebDriverWait(driver, 3).until(
-                        EC.presence_of_element_located((By.NAME, 'onair_seqs'))
-                    )
-                    driver.execute_script('arguments[0].click();', checkbox)
-
-                    assign_btn = driver.find_element(
-                        By.XPATH, "//input[@type='button' and @value='방송수업개별배정']"
-                    )
-                    driver.execute_script('arguments[0].click();', assign_btn)
-
-                    for _ in range(2):
-                        try:
-                            WebDriverWait(driver, 2).until(EC.alert_is_present()).accept()
-                            time.sleep(0.5)
-                        except Exception:
-                            break
-
+                        page.locator(f"input[name='sh_week_gb'][value='{d_val}']").first.click()
+                    page.locator("input[type='button'][value='검색'].srch").first.click()
+                    page.wait_for_timeout(1200)
+                    onair = page.locator("[name='onair_seqs']")
+                    if onair.count() == 0:
+                        raise RuntimeError('검색 결과 없음')
+                    onair.first.click()
+                    page.locator("input[type='button'][value='방송수업개별배정']").first.click()
+                    page.wait_for_timeout(700)
                     success += 1
                     self.write_log(f'[{sub}] 배정 성공')
-
                 except Exception as e:
                     self.write_log(f'[{sub}] 배정 실패: {e}')
 
-            # 구글 시트에 완료 체크 + 과목 업데이트
             self.write_log(f'[{name}] 시트 완료 체크 중...')
             self.adm_sheet.update_subjects(sheet_row, subjects)
             self.adm_sheet.mark_done(sheet_row)
 
-            # 로컬 상태 업데이트
             for s in self.students:
                 if s.get('row') == sheet_row:
                     s['done'] = True
@@ -680,20 +616,14 @@ class AdmissionApp(ctk.CTk):
 
             self.write_log(f'[{name}] 완료! (배정 {success}/{len(final_selection)}건)')
             self.after(0, self._render_students)
-            self.after(
-                0, lambda: messagebox.showinfo(
-                    '완료', f'[{name}] LMS 배정 및 시트 체크 완료!\n'
-                            f'({success}/{len(final_selection)}건 성공)'
-                )
-            )
-
+            self.after(0, lambda: messagebox.showinfo(
+                '완료', f'[{name}] LMS 배정 및 시트 체크 완료!\n({success}/{len(final_selection)}건 성공)'
+            ))
         except Exception as e:
             self.write_log(f'[{name}] 배정 에러: {e}\n{traceback.format_exc()}')
-            self.after(
-                0, lambda: messagebox.showerror('오류', f'배정 중 오류 발생:\n{e}')
-            )
+            self.after(0, lambda: messagebox.showerror('오류', f'배정 중 오류 발생:\n{e}'))
         finally:
-            SeleniumManager.safe_quit(driver)
+            PlaywrightManager.safe_close(session)
             self._macro_running = False
 
     # ──────────────────────────────────────────
